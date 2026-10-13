@@ -1,5 +1,6 @@
 from driftwatch.sketches.count_min_sketch import CountMinSketch
 from driftwatch.sketches.bloom_filter import BloomFilter
+from driftwatch.sketches.hyperloglog import HyperLogLog
 
 
 def test_count_min_sketch_accuracy():
@@ -23,9 +24,8 @@ def test_bloom_filter_no_false_negatives():
     for key in inserted_keys:
         bf.add(key)
 
-    # Fundamental guarantee: zero false negatives
     for key in inserted_keys:
-        assert key in bf, f"False negative encountered on inserted key: {key}"
+        assert key in bf, f"False negative on key: {key}"
 
 
 def test_bloom_filter_false_positive_rate():
@@ -33,11 +33,9 @@ def test_bloom_filter_false_positive_rate():
     target_p = 0.05
     bf = BloomFilter(expected_elements=expected_n, false_positive_rate=target_p)
 
-    # Insert expected_n items
     for i in range(expected_n):
         bf.add(f"user_session_{i}")
 
-    # Query unseen items and evaluate empirical false positive rate
     test_queries = 2000
     false_positives = 0
     for i in range(test_queries):
@@ -46,5 +44,23 @@ def test_bloom_filter_false_positive_rate():
             false_positives += 1
 
     empirical_p = false_positives / test_queries
-    # Verify empirical rate stays close to theoretical bound
-    assert empirical_p <= target_p + 0.02, f"Empirical FP rate {empirical_p} exceeded target {target_p}"
+    assert empirical_p <= target_p + 0.02
+
+
+def test_hyperloglog_cardinality_estimation():
+    # Precision p = 10 -> m = 1024 registers, theoretical std error ~= 3.25%
+    hll = HyperLogLog(precision=10)
+    actual_distinct = 5000
+
+    for i in range(actual_distinct):
+        hll.add(f"unique_client_id_{i}")
+
+    # Add duplicates to ensure idempotency
+    for i in range(1500):
+        hll.add(f"unique_client_id_{i}")
+
+    estimate = hll.count()
+
+    # Estimate should fall comfortably within a 10% error margin (approx 3 std errors)
+    relative_error = abs(estimate - actual_distinct) / actual_distinct
+    assert relative_error <= 0.10, f"HLL error too high: {relative_error:.4f} (estimate: {estimate})"
