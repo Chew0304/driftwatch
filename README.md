@@ -11,36 +11,27 @@ By replacing naive collections with probabilistic sketching structures and accel
 
 ---
 
+
 ## Architecture Overview
-Streaming Telemetry / Query Ingestion
-                                     │
-                                     ▼
-             ┌───────────────────────────────────────────────┐
-             │       Bloom Filter Deduplication Gate         │
-             │   (Zero False Negatives, Tunable Error p)     │
-             └──────────────┬─────────────────┬──────────────┘
-                            │                 │
-                   [Dropped Duplicates]  [Valid Events]
-                                              │
-            ┌─────────────────────────────────┴─────────────────────────────────┐
-            ▼                                                                   ▼
-┌───────────────────────────────┐                                   ┌───────────────────────────────┐
-│       Count-Min Sketch        │                                   │          HyperLogLog          │
-│   Frequency Estimation (ε, δ) │                                   │     Cardinality Estimation    │
-│  Overestimation Bound: ε · N  │                                   │     Relative Error: 1.04/√m   │
-└───────────────────────────────┘                                   └───────────────────────────────┘
-│
-▼
-┌───────────────────────────────┐
-│       KD-Tree Indexing        │
-│   O(log N) Spatial Pruning    │
-└───────────────┬───────────────┘
-│
-▼
-┌───────────────────────────────┐
-│      VectorDriftDetector      │
-│   Statistical Outlier Alert   │
-└───────────────────────────────┘
+
+DriftWatch processes streaming telemetry through a 4-stage pipeline that eliminates unbounded memory growth:
+
+### Stage 1: Ingestion & Deduplication Gate (`driftwatch.sketches.bloom_filter`)
+* **Streaming Ingestion:** Ingests high-velocity telemetry streams containing request IDs, query tokens, and embedding vectors.
+* **Replay Filtering:** Evaluates incoming event IDs against a bit-level Bloom Filter to drop replay attacks and duplicate payloads with zero false negatives ($p \le 0.01$).
+* **Pipeline Dispatch:** Routes verified, non-duplicate events concurrently to the sketching estimators and the vector drift engine.
+
+### Stage 2: Sublinear Telemetry & Sketching (`driftwatch.sketches`)
+* **Frequency Tracking (`CountMinSketch`):** Aggregates token and feature occurrences across a fixed $d \times w$ integer grid, guaranteeing zero underestimation and bounded error ($\le \epsilon \cdot N$).
+* **Cardinality Tracking (`HyperLogLog`):** Tracks active client and session counts using 64-bit hashing and register leading-zero extraction, achieving $\approx 1.04/\sqrt{m}$ error in $\approx 1\text{ KB}$ of RAM.
+
+### Stage 3: High-Dimensional Spatial Indexing (`driftwatch.drift.spatial_index`)
+* **Spatial Partitioning:** Indexes baseline training embeddings into an orthogonal hyperplane $k$-d tree.
+* **Nearest-Neighbor Pruning:** Replaces exhaustive $\mathcal{O}(N)$ distance sweeps with recursive hyperplane branch pruning to query nearest neighbors in $\mathcal{O}(\log N)$ average time.
+
+### Stage 4: Statistical Drift Detection (`driftwatch.drift.detector`)
+* **Held-out Calibration:** Uses an 80/20 reference split to calibrate baseline distance statistics ($\mu, \sigma$) and avoid zero-distance self-query threshold collapse.
+* **Batch Drift Evaluation:** Measures mean nearest-neighbor distances for incoming embedding batches; triggers automated alerts whenever batch distance exceeds the empirical threshold ($\mu + k\sigma$).
 
 
 ---
